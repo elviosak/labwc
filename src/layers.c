@@ -423,7 +423,7 @@ handle_popup_destroy(struct wl_listener *listener, void *data)
 		wl_list_remove(&popup->commit.link);
 	}
 
-	cursor_update_focus(popup->server);
+	desktop_focus_topmost_view(popup->server);
 
 	free(popup);
 }
@@ -552,8 +552,10 @@ handle_new_popup(struct wl_listener *listener, void *data)
 	 * of a use-case is the xfce4-panel start menu which can be opened by a
 	 * keyboard shortcut (linked to xfce4-popup-applicationmenu).
 	 */
-	seat_force_focus_surface(&server->seat,
-		toplevel->layer_surface->surface);
+	if (wlr_popup->seat) {		
+		seat_force_focus_surface(&server->seat,
+			toplevel->layer_surface->surface);
+	}
 
 	int lx, ly;
 	wlr_scene_node_coords(&surface->tree->node, &lx, &ly);
