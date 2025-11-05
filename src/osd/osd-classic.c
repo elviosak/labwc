@@ -8,9 +8,11 @@
 #include "common/buf.h"
 #include "common/font.h"
 #include "common/lab-scene-rect.h"
+#include "common/list.h"
 #include "common/string-helpers.h"
 #include "config/rcxml.h"
 #include "labwc.h"
+#include "node.h"
 #include "osd.h"
 #include "output.h"
 #include "scaled-buffer/scaled-font-buffer.h"
@@ -18,8 +20,8 @@
 #include "theme.h"
 #include "workspaces.h"
 
-struct osd_classic_scene_item {
-	struct view *view;
+struct osd_classic_item {
+	struct osd_item base;
 	struct wlr_scene_tree *normal_tree, *active_tree;
 };
 
@@ -76,7 +78,7 @@ create_fields_scene(struct server *server, struct view *view,
 static void
 osd_classic_create(struct output *output, struct wl_array *views)
 {
-	assert(!output->osd_scene.tree);
+	assert(!output->osd_scene.tree && wl_list_empty(&output->osd_scene.items));
 
 	struct server *server = output->server;
 	struct theme *theme = server->theme;
@@ -155,9 +157,12 @@ osd_classic_create(struct output *output, struct wl_array *views)
 	/* Draw text for each node */
 	struct view **view;
 	wl_array_for_each(view, views) {
-		struct osd_classic_scene_item *item =
-			wl_array_add(&output->osd_scene.items, sizeof(*item));
-		item->view = *view;
+		struct osd_classic_item *item = znew(*item);
+		wl_list_append(&output->osd_scene.items, &item->base.link);
+		item->base.view = *view;
+		item->base.tree = wlr_scene_tree_create(output->osd_scene.tree);
+		node_descriptor_create(&item->base.tree->node,
+			LAB_NODE_OSD_ITEM, NULL, item);
 		/*
 		 *    OSD border
 		 * +---------------------------------+
@@ -177,10 +182,8 @@ osd_classic_create(struct output *output, struct wl_array *views)
 		int x = padding
 			+ switcher_theme->item_active_border_width
 			+ switcher_theme->item_padding_x;
-		struct wlr_scene_tree *item_root =
-			wlr_scene_tree_create(output->osd_scene.tree);
-		item->normal_tree = wlr_scene_tree_create(item_root);
-		item->active_tree = wlr_scene_tree_create(item_root);
+		item->normal_tree = wlr_scene_tree_create(item->base.tree);
+		item->active_tree = wlr_scene_tree_create(item->base.tree);
 		wlr_scene_node_set_enabled(&item->active_tree->node, false);
 
 		float *active_bg_color = switcher_theme->item_active_bg_color;
@@ -198,6 +201,11 @@ osd_classic_create(struct output *output, struct wl_array *views)
 		struct lab_scene_rect *highlight_rect = lab_scene_rect_create(
 			item->active_tree, &highlight_opts);
 		wlr_scene_node_set_position(&highlight_rect->tree->node, padding, y);
+
+		/* hitbox for mouse clicks */
+		struct wlr_scene_rect *hitbox = wlr_scene_rect_create(item->base.tree,
+			w - 2 * padding, switcher_theme->item_height, (float[4]) {0});
+		wlr_scene_node_set_position(&hitbox->node, padding, y);
 
 		create_fields_scene(server, *view, item->normal_tree,
 			text_color, bg_color, field_widths_sum, x, y);
@@ -218,9 +226,9 @@ error:;
 static void
 osd_classic_update(struct output *output)
 {
-	struct osd_classic_scene_item *item;
-	wl_array_for_each(item, &output->osd_scene.items) {
-		bool active = item->view == output->server->osd_state.cycle_view;
+	struct osd_classic_item *item;
+	wl_list_for_each(item, &output->osd_scene.items, base.link) {
+		bool active = item->base.view == output->server->osd_state.cycle_view;
 		wlr_scene_node_set_enabled(&item->normal_tree->node, !active);
 		wlr_scene_node_set_enabled(&item->active_tree->node, active);
 	}

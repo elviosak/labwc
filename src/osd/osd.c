@@ -24,12 +24,15 @@ destroy_osd_scenes(struct server *server)
 {
 	struct output *output;
 	wl_list_for_each(output, &server->outputs, link) {
+		struct osd_item *item, *tmp;
+		wl_list_for_each_safe(item, tmp, &output->osd_scene.items, link) {
+			wl_list_remove(&item->link);
+			free(item);
+		}
 		if (output->osd_scene.tree) {
 			wlr_scene_node_destroy(&output->osd_scene.tree->node);
 			output->osd_scene.tree = NULL;
 		}
-		wl_array_release(&output->osd_scene.items);
-		wl_array_init(&output->osd_scene.items);
 	}
 }
 
@@ -139,6 +142,16 @@ osd_on_view_destroy(struct view *view)
 			osd_state->preview_anchor = lab_wlr_scene_get_prev_node(node);
 		}
 	}
+}
+
+void
+osd_on_cursor_release(struct server *server, struct wlr_scene_node *node)
+{
+	assert(server->input_mode == LAB_INPUT_STATE_WINDOW_SWITCHER);
+
+	struct osd_item *item = node_osd_item_from_node(node);
+	server->osd_state.cycle_view = item->view;
+	osd_finish(server, /*switch_focus*/ true);
 }
 
 static void

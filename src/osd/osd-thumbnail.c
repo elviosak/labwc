@@ -8,7 +8,9 @@
 #include "common/array.h"
 #include "common/box.h"
 #include "common/lab-scene-rect.h"
+#include "common/list.h"
 #include "labwc.h"
+#include "node.h"
 #include "osd.h"
 #include "output.h"
 #include "scaled-buffer/scaled-font-buffer.h"
@@ -16,9 +18,8 @@
 #include "theme.h"
 #include "view.h"
 
-struct osd_thumbnail_scene_item {
-	struct view *view;
-	struct wlr_scene_tree *tree;
+struct osd_thumbnail_item {
+	struct osd_item base;
 	struct scaled_font_buffer *normal_title;
 	struct scaled_font_buffer *active_title;
 	struct lab_scene_rect *active_bg;
@@ -103,7 +104,7 @@ create_title(struct wlr_scene_tree *parent,
 	return buffer;
 }
 
-static struct osd_thumbnail_scene_item *
+static struct osd_thumbnail_item *
 create_item_scene(struct wlr_scene_tree *parent, struct view *view,
 		struct output *output)
 {
@@ -124,10 +125,12 @@ create_item_scene(struct wlr_scene_tree *parent, struct view *view,
 		return NULL;
 	}
 
-	struct osd_thumbnail_scene_item *item =
-		wl_array_add(&output->osd_scene.items, sizeof(*item));
-	item->tree = wlr_scene_tree_create(parent);
-	item->view = view;
+	struct osd_thumbnail_item *item = znew(*item);
+	wl_list_append(&output->osd_scene.items, &item->base.link);
+	struct wlr_scene_tree *tree = wlr_scene_tree_create(parent);
+	node_descriptor_create(&tree->node, LAB_NODE_OSD_ITEM, NULL, item);
+	item->base.tree = tree;
+	item->base.view = view;
 
 	/* background for selected item */
 	struct lab_scene_rect_options opts = {
@@ -138,13 +141,17 @@ create_item_scene(struct wlr_scene_tree *parent, struct view *view,
 		.width = switcher_theme->item_width,
 		.height = switcher_theme->item_height,
 	};
-	item->active_bg = lab_scene_rect_create(item->tree, &opts);
+	item->active_bg = lab_scene_rect_create(tree, &opts);
+
+	/* hitbox for mouse clicks */
+	wlr_scene_rect_create(tree, switcher_theme->item_width,
+		switcher_theme->item_height, (float[4]) {0});
 
 	/* thumbnail */
 	struct wlr_buffer *thumb_buffer = render_thumb(output, view);
 	if (thumb_buffer) {
 		struct wlr_scene_buffer *thumb_scene_buffer =
-			wlr_scene_buffer_create(item->tree, thumb_buffer);
+			wlr_scene_buffer_create(tree, thumb_buffer);
 		wlr_buffer_drop(thumb_buffer);
 		struct wlr_box thumb_box = box_fit_within(
 			thumb_buffer->width, thumb_buffer->height,
@@ -156,17 +163,17 @@ create_item_scene(struct wlr_scene_tree *parent, struct view *view,
 	}
 
 	/* title */
-	item->normal_title = create_title(item->tree, switcher_theme,
+	item->normal_title = create_title(tree, switcher_theme,
 		view->title, theme->osd_label_text_color,
 		theme->osd_bg_color, title_y);
-	item->active_title = create_title(item->tree, switcher_theme,
+	item->active_title = create_title(tree, switcher_theme,
 		view->title, theme->osd_label_text_color,
 		switcher_theme->item_active_bg_color, title_y);
 
 	/* icon */
 	int icon_size = switcher_theme->item_icon_size;
-	struct scaled_icon_buffer *icon_buffer = scaled_icon_buffer_create(
-		item->tree, server, icon_size, icon_size);
+	struct scaled_icon_buffer *icon_buffer =
+		scaled_icon_buffer_create(tree, server, icon_size, icon_size);
 	scaled_icon_buffer_set_view(icon_buffer, view);
 	int x = (switcher_theme->item_width - icon_size) / 2;
 	int y = title_y - padding - icon_size + 10; /* slide by 10px */
@@ -210,7 +217,7 @@ get_items_geometry(struct output *output, struct theme *theme,
 static void
 osd_thumbnail_create(struct output *output, struct wl_array *views)
 {
-	assert(!output->osd_scene.tree);
+	assert(!output->osd_scene.tree && wl_list_empty(&output->osd_scene.items));
 
 	struct server *server = output->server;
 	struct theme *theme = server->theme;
@@ -229,14 +236,14 @@ osd_thumbnail_create(struct output *output, struct wl_array *views)
 	struct view **view;
 	int index = 0;
 	wl_array_for_each(view, views) {
-		struct osd_thumbnail_scene_item *item = create_item_scene(
+		struct osd_thumbnail_item *item = create_item_scene(
 			output->osd_scene.tree, *view, output);
 		if (!item) {
 			break;
 		}
 		int x = (index % nr_cols) * switcher_theme->item_width + padding;
 		int y = (index / nr_cols) * switcher_theme->item_height + padding;
-		wlr_scene_node_set_position(&item->tree->node, x, y);
+		wlr_scene_node_set_position(&item->base.tree->node, x, y);
 		index++;
 	}
 
@@ -265,9 +272,9 @@ osd_thumbnail_create(struct output *output, struct wl_array *views)
 static void
 osd_thumbnail_update(struct output *output)
 {
-	struct osd_thumbnail_scene_item *item;
-	wl_array_for_each(item, &output->osd_scene.items) {
-		bool active = (item->view == output->server->osd_state.cycle_view);
+	struct osd_thumbnail_item *item;
+	wl_list_for_each(item, &output->osd_scene.items, base.link) {
+		bool active = (item->base.view == output->server->osd_state.cycle_view);
 		wlr_scene_node_set_enabled(&item->active_bg->tree->node, active);
 		wlr_scene_node_set_enabled(
 			&item->active_title->scene_buffer->node, active);
