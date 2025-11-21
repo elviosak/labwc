@@ -21,7 +21,6 @@
 #include "menu/menu.h"
 #include "osd.h"
 #include "output.h"
-#include "output-state.h"
 #include "placement.h"
 #include "regions.h"
 #include "resize-indicator.h"
@@ -424,7 +423,7 @@ view_is_focusable(struct view *view)
 	switch (view_wants_focus(view)) {
 	case VIEW_WANTS_FOCUS_ALWAYS:
 	case VIEW_WANTS_FOCUS_LIKELY:
-		return (view->mapped || view->minimized);
+		return view->mapped;
 	default:
 		return false;
 	}
@@ -513,20 +512,6 @@ view_discover_output(struct view *view, struct wlr_box *geometry)
 	return false;
 }
 
-static void
-set_adaptive_sync_fullscreen(struct view *view)
-{
-	if (!output_is_usable(view->output)) {
-		return;
-	}
-	if (rc.adaptive_sync != LAB_ADAPTIVE_SYNC_FULLSCREEN) {
-		return;
-	}
-	/* Enable adaptive sync if view is fullscreen */
-	output_enable_adaptive_sync(view->output, view->fullscreen);
-	output_state_commit(view->output);
-}
-
 void
 view_set_activated(struct view *view, bool activated)
 {
@@ -548,7 +533,7 @@ view_set_activated(struct view *view, bool activated)
 			keyboard_update_layout(&view->server->seat, view->keyboard_layout);
 		}
 	}
-	set_adaptive_sync_fullscreen(view);
+	output_set_has_fullscreen_view(view->output, view->fullscreen);
 }
 
 void
@@ -801,11 +786,7 @@ _minimize(struct view *view, bool minimized)
 	view->minimized = minimized;
 	wl_signal_emit_mutable(&view->events.minimized, NULL);
 
-	if (minimized) {
-		view->impl->unmap(view, /* client_request */ false);
-	} else {
-		view->impl->map(view);
-	}
+	view_update_visibility(view);
 }
 
 static void
@@ -856,11 +837,6 @@ view_minimize(struct view *view, bool minimized)
 	struct view *root = view_get_root(view);
 	_minimize(root, minimized);
 	minimize_sub_views(root, minimized);
-
-	/* Enable top-layer when full-screen views are minimized */
-	if (view->fullscreen && view->output) {
-		desktop_update_top_layer_visibility(view->server);
-	}
 }
 
 bool
@@ -1786,7 +1762,7 @@ view_set_fullscreen(struct view *view, bool fullscreen)
 	} else {
 		view_apply_special_geometry(view);
 	}
-	set_adaptive_sync_fullscreen(view);
+	output_set_has_fullscreen_view(view->output, view->fullscreen);
 }
 
 static bool
@@ -2473,37 +2449,73 @@ static void
 handle_map(struct wl_listener *listener, void *data)
 {
 	struct view *view = wl_container_of(listener, view, mappable.map);
-	if (view->minimized) {
-		/*
-		 * The view->impl functions do not directly support
-		 * mapping a view while minimized. Instead, mark it as
-		 * not minimized, map it, and then minimize it again.
-		 */
-		view->minimized = false;
-		view->impl->map(view);
-		view_minimize(view, true);
-	} else {
-		view->impl->map(view);
-	}
+	view->impl->map(view);
 }
 
 static void
 handle_unmap(struct wl_listener *listener, void *data)
 {
 	struct view *view = wl_container_of(listener, view, mappable.unmap);
-	view->impl->unmap(view, /* client_request */ true);
+	view->impl->unmap(view);
 }
 
-/*
- * TODO: after the release of wlroots 0.17, consider incorporating this
- * function into a more general view_set_surface() function, which could
- * connect other surface event handlers (like commit) as well.
- */
 void
 view_connect_map(struct view *view, struct wlr_surface *surface)
 {
 	assert(view);
 	mappable_connect(&view->mappable, surface, handle_map, handle_unmap);
+}
+
+/* Used in both (un)map and (un)minimize */
+void
+view_update_visibility(struct view *view)
+{
+	bool visible = view->mapped && !view->minimized;
+	if (visible == view->scene_tree->node.enabled) {
+		return;
+	}
+
+	wlr_scene_node_set_enabled(&view->scene_tree->node, visible);
+	struct server *server = view->server;
+
+	if (visible) {
+		desktop_focus_view(view, /*raise*/ true);
+	} else {
+		/*
+		 * When exiting an xwayland application with multiple
+		 * views mapped, a race condition can occur: after the
+		 * topmost view is unmapped, the next view under it is
+		 * offered focus, but is also unmapped before accepting
+		 * focus (so server->active_view remains NULL). To avoid
+		 * being left with no active view at all, check for that
+		 * case also.
+		 */
+		if (view == server->active_view || !server->active_view) {
+			desktop_focus_topmost_view(server);
+		}
+	}
+
+	/*
+	 * Show top layer when a fullscreen view is hidden.
+	 * Hide it if a fullscreen view is shown (or uncovered).
+	 */
+	desktop_update_top_layer_visibility(server);
+
+	/*
+	 * We may need to disable adaptive sync if view was fullscreen.
+	 *
+	 * FIXME: this logic doesn't account for multiple fullscreen
+	 * views. It should probably be combined with the existing
+	 * logic in desktop_update_top_layer_visibility().
+	 */
+	if (view->fullscreen && !visible) {
+		output_set_has_fullscreen_view(view->output, false);
+	}
+
+	/* Update usable area to account for XWayland "struts" (panels) */
+	if (view_has_strut_partial(view)) {
+		output_update_all_usable_areas(server, false);
+	}
 }
 
 void
@@ -2626,20 +2638,6 @@ view_destroy(struct view *view)
 	undecorate(view);
 
 	view_set_icon(view, NULL, NULL);
-
-	/*
-	 * The layer-shell top-layer is disabled when an application is running
-	 * in fullscreen mode, so if that's the case, we may have to re-enable
-	 * it here.
-	 */
-	if (view->fullscreen && view->output) {
-		view->fullscreen = false;
-		desktop_update_top_layer_visibility(server);
-		if (rc.adaptive_sync == LAB_ADAPTIVE_SYNC_FULLSCREEN) {
-			set_adaptive_sync_fullscreen(view);
-		}
-	}
-
 	menu_on_view_destroy(view);
 
 	/*

@@ -575,6 +575,14 @@ xdg_toplevel_view_minimize(struct view *view, bool minimized)
 	/* noop */
 }
 
+static struct view *
+xdg_toplevel_view_get_parent(struct view *view)
+{
+	struct wlr_xdg_toplevel *toplevel = xdg_toplevel_from_view(view);
+	return toplevel->parent ?
+		(struct view *)toplevel->parent->base->data : NULL;
+}
+
 static struct wlr_xdg_toplevel *
 top_parent_of(struct view *view)
 {
@@ -590,8 +598,7 @@ static struct view *
 xdg_toplevel_view_get_root(struct view *view)
 {
 	struct wlr_xdg_toplevel *root = top_parent_of(view);
-	struct wlr_xdg_surface *surface = (struct wlr_xdg_surface *)root->base;
-	return (struct view *)surface->data;
+	return (struct view *)root->base->data;
 }
 
 static void
@@ -607,7 +614,7 @@ xdg_toplevel_view_append_children(struct view *self, struct wl_array *children)
 		if (view->type != LAB_XDG_SHELL_VIEW) {
 			continue;
 		}
-		if (!view->mapped && !view->minimized) {
+		if (!view->mapped) {
 			continue;
 		}
 		if (top_parent_of(view) != toplevel) {
@@ -718,35 +725,14 @@ xdg_toplevel_view_notify_tiled(struct view *view)
 	}
 }
 
-static struct view *
-lookup_view_by_xdg_toplevel(struct server *server,
-		struct wlr_xdg_toplevel *xdg_toplevel)
-{
-	struct view *view;
-	wl_list_for_each(view, &server->views, link) {
-		if (view->type != LAB_XDG_SHELL_VIEW) {
-			continue;
-		}
-		if (xdg_toplevel_from_view(view) == xdg_toplevel) {
-			return view;
-		}
-	}
-	return NULL;
-}
-
 static void
 set_initial_position(struct view *view)
 {
-	struct wlr_xdg_toplevel *parent_xdg_toplevel =
-		xdg_toplevel_from_view(view)->parent;
-
 	view_constrain_size_to_that_of_usable_area(view);
 
-	if (parent_xdg_toplevel) {
+	struct view *parent = xdg_toplevel_view_get_parent(view);
+	if (parent) {
 		/* Child views are center-aligned relative to their parents */
-		struct view *parent = lookup_view_by_xdg_toplevel(
-			view->server, parent_xdg_toplevel);
-		assert(parent);
 		view_set_output(view, parent->output);
 		view_center(view, &parent->pending);
 		return;
@@ -757,31 +743,11 @@ set_initial_position(struct view *view)
 }
 
 static void
-init_foreign_toplevel(struct view *view)
-{
-	assert(!view->foreign_toplevel);
-	view->foreign_toplevel = foreign_toplevel_create(view);
-
-	struct wlr_xdg_toplevel *toplevel = xdg_toplevel_from_view(view);
-	if (!toplevel->parent) {
-		return;
-	}
-	struct wlr_xdg_surface *surface = toplevel->parent->base;
-	struct view *parent = surface->data;
-	if (!parent->foreign_toplevel) {
-		return;
-	}
-	foreign_toplevel_set_parent(view->foreign_toplevel, parent->foreign_toplevel);
-}
-
-static void
 xdg_toplevel_view_map(struct view *view)
 {
 	if (view->mapped) {
 		return;
 	}
-
-	view->mapped = true;
 
 	/*
 	 * An output should have been chosen when the surface was first
@@ -790,11 +756,11 @@ xdg_toplevel_view_map(struct view *view)
 	if (!view->output) {
 		view_set_output(view, output_nearest_to_cursor(view->server));
 	}
-	struct wlr_xdg_surface *xdg_surface = xdg_surface_from_view(view);
-	wlr_scene_node_set_enabled(&view->scene_tree->node, true);
+
+	view->mapped = true;
 
 	if (!view->foreign_toplevel) {
-		init_foreign_toplevel(view);
+		view_impl_init_foreign_toplevel(view);
 		/*
 		 * Initial outputs will be synced via
 		 * view->events.new_outputs on view_moved()
@@ -813,6 +779,8 @@ xdg_toplevel_view_map(struct view *view)
 		 * dimensions remain zero until handle_commit().
 		 */
 		if (wlr_box_empty(&view->pending)) {
+			struct wlr_xdg_surface *xdg_surface =
+				xdg_surface_from_view(view);
 			view->pending.width = xdg_surface->geometry.width;
 			view->pending.height = xdg_surface->geometry.height;
 		}
@@ -839,22 +807,11 @@ xdg_toplevel_view_map(struct view *view)
 }
 
 static void
-xdg_toplevel_view_unmap(struct view *view, bool client_request)
+xdg_toplevel_view_unmap(struct view *view)
 {
 	if (view->mapped) {
 		view->mapped = false;
-		wlr_scene_node_set_enabled(&view->scene_tree->node, false);
 		view_impl_unmap(view);
-	}
-
-	/*
-	 * If the view was explicitly unmapped by the client (rather
-	 * than just minimized), destroy the foreign toplevel handle so
-	 * the unmapped view doesn't show up in panels and the like.
-	 */
-	if (client_request && view->foreign_toplevel) {
-		foreign_toplevel_destroy(view->foreign_toplevel);
-		view->foreign_toplevel = NULL;
 	}
 }
 
@@ -882,6 +839,7 @@ static const struct view_impl xdg_toplevel_view_impl = {
 	.unmap = xdg_toplevel_view_unmap,
 	.maximize = xdg_toplevel_view_maximize,
 	.minimize = xdg_toplevel_view_minimize,
+	.get_parent = xdg_toplevel_view_get_parent,
 	.get_root = xdg_toplevel_view_get_root,
 	.append_children = xdg_toplevel_view_append_children,
 	.is_modal_dialog = xdg_toplevel_view_is_modal_dialog,

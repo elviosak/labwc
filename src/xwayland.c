@@ -38,7 +38,8 @@ static_assert(ARRAY_SIZE(atom_names) == ATOM_COUNT, "atom names out of sync");
 
 static xcb_atom_t atoms[ATOM_COUNT] = {0};
 
-static void xwayland_view_unmap(struct view *view, bool client_request);
+static void set_surface(struct view *view, struct wlr_surface *surface);
+static void xwayland_view_unmap(struct view *view);
 
 static struct xwayland_view *
 xwayland_view_from_view(struct view *view)
@@ -191,6 +192,13 @@ xwayland_view_offer_focus(struct view *view)
 	wlr_xwayland_surface_offer_focus(xwayland_surface_from_view(view));
 }
 
+static struct view *
+xwayland_view_get_parent(struct view *view)
+{
+	struct wlr_xwayland_surface *xsurface = xwayland_surface_from_view(view);
+	return xsurface->parent ? (struct view *)xsurface->parent->data : NULL;
+}
+
 static struct wlr_xwayland_surface *
 top_parent_of(struct view *view)
 {
@@ -332,8 +340,7 @@ handle_surface_destroy(struct wl_listener *listener, void *data)
 	struct view *view = wl_container_of(listener, view, surface_destroy);
 	assert(data && data == view->surface);
 
-	view->surface = NULL;
-	wl_list_remove(&view->surface_destroy.link);
+	set_surface(view, NULL);
 }
 
 static void
@@ -343,15 +350,7 @@ handle_destroy(struct wl_listener *listener, void *data)
 	struct xwayland_view *xwayland_view = xwayland_view_from_view(view);
 	assert(xwayland_view->xwayland_surface->data == view);
 
-	if (view->surface) {
-		/*
-		 * We got the destroy signal from
-		 * wlr_xwayland_surface before the
-		 * destroy signal from wlr_surface.
-		 */
-		wl_list_remove(&view->surface_destroy.link);
-	}
-	view->surface = NULL;
+	set_surface(view, NULL);
 
 	/*
 	 * Break view <-> xsurface association.  Note that the xsurface
@@ -558,7 +557,7 @@ handle_set_override_redirect(struct wl_listener *listener, void *data)
 	struct server *server = view->server;
 	bool mapped = xsurface->surface && xsurface->surface->mapped;
 	if (mapped) {
-		xwayland_view_unmap(view, /* client_request */ true);
+		xwayland_view_unmap(view);
 	}
 	handle_destroy(&view->destroy, xsurface);
 	/* view is invalid after this point */
@@ -776,20 +775,21 @@ set_initial_position(struct view *view,
 }
 
 static void
-init_foreign_toplevel(struct view *view)
+set_surface(struct view *view, struct wlr_surface *surface)
 {
-	assert(!view->foreign_toplevel);
-	view->foreign_toplevel = foreign_toplevel_create(view);
-
-	struct wlr_xwayland_surface *surface = xwayland_surface_from_view(view);
-	if (!surface->parent) {
-		return;
+	if (view->surface) {
+		/* Disconnect wlr_surface event listeners */
+		wl_list_remove(&view->commit.link);
+		wl_list_remove(&view->surface_destroy.link);
 	}
-	struct view *parent = (struct view *)surface->parent->data;
-	if (!parent || !parent->foreign_toplevel) {
-		return;
+	view->surface = surface;
+	if (surface) {
+		/* Connect wlr_surface event listeners */
+		view->commit.notify = handle_commit;
+		wl_signal_add(&surface->events.commit, &view->commit);
+		view->surface_destroy.notify = handle_surface_destroy;
+		wl_signal_add(&surface->events.destroy, &view->surface_destroy);
 	}
-	foreign_toplevel_set_parent(view->foreign_toplevel, parent->foreign_toplevel);
 }
 
 static void
@@ -799,18 +799,9 @@ xwayland_view_map(struct view *view)
 	struct wlr_xwayland_surface *xwayland_surface =
 		xwayland_view->xwayland_surface;
 	assert(xwayland_surface);
+	assert(xwayland_surface->surface);
 
 	if (view->mapped) {
-		return;
-	}
-	if (!xwayland_surface->surface) {
-		/*
-		 * We may get here if a user minimizes an xwayland dialog at the
-		 * same time as the client requests unmap, which xwayland
-		 * clients sometimes do without actually requesting destroy
-		 * even if they don't intend to use that view/surface anymore
-		 */
-		wlr_log(WLR_DEBUG, "Cannot map view without wlr_surface");
 		return;
 	}
 
@@ -823,17 +814,9 @@ xwayland_view_map(struct view *view)
 	handle_map_request(&xwayland_view->map_request, NULL);
 
 	view->mapped = true;
-	wlr_scene_node_set_enabled(&view->scene_tree->node, true);
 
 	if (view->surface != xwayland_surface->surface) {
-		if (view->surface) {
-			wl_list_remove(&view->surface_destroy.link);
-		}
-		view->surface = xwayland_surface->surface;
-
-		/* Required to set the surface to NULL when destroyed by the client */
-		view->surface_destroy.notify = handle_surface_destroy;
-		wl_signal_add(&view->surface->events.destroy, &view->surface_destroy);
+		set_surface(view, xwayland_surface->surface);
 
 		/* Will be free'd automatically once the surface is being destroyed */
 		struct wlr_scene_tree *tree = wlr_scene_subsurface_tree_create(
@@ -852,7 +835,7 @@ xwayland_view_map(struct view *view)
 	 * shown in taskbars/docks/etc.
 	 */
 	if (!view->foreign_toplevel && view_is_focusable(view)) {
-		init_foreign_toplevel(view);
+		view_impl_init_foreign_toplevel(view);
 		/*
 		 * Initial outputs will be synced via
 		 * view->events.new_outputs on view_moved()
@@ -872,10 +855,6 @@ xwayland_view_map(struct view *view)
 		view_moved(view);
 	}
 
-	/* Add commit here, as xwayland map/unmap can change the wlr_surface */
-	wl_signal_add(&xwayland_surface->surface->events.commit, &view->commit);
-	view->commit.notify = handle_commit;
-
 	/*
 	 * If the view was focused (on the xwayland server side) before
 	 * being mapped, update the seat focus now. Note that this only
@@ -890,39 +869,16 @@ xwayland_view_map(struct view *view)
 
 	view_impl_map(view);
 	view->been_mapped = true;
-
-	/* Update usable area to account for XWayland "struts" (panels) */
-	if (xwayland_surface->strut_partial) {
-		output_update_all_usable_areas(view->server, false);
-	}
 }
 
 static void
-xwayland_view_unmap(struct view *view, bool client_request)
+xwayland_view_unmap(struct view *view)
 {
 	if (!view->mapped) {
-		goto out;
+		return;
 	}
 	view->mapped = false;
-	wl_list_remove(&view->commit.link);
-	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
 	view_impl_unmap(view);
-
-	/* Update usable area to account for XWayland "struts" (panels) */
-	if (xwayland_surface_from_view(view)->strut_partial) {
-		output_update_all_usable_areas(view->server, false);
-	}
-
-	/*
-	 * If the view was explicitly unmapped by the client (rather
-	 * than just minimized), destroy the foreign toplevel handle so
-	 * the unmapped view doesn't show up in panels and the like.
-	 */
-out:
-	if (client_request && view->foreign_toplevel) {
-		foreign_toplevel_destroy(view->foreign_toplevel);
-		view->foreign_toplevel = NULL;
-	}
 }
 
 static void
@@ -973,7 +929,7 @@ xwayland_view_append_children(struct view *self, struct wl_array *children)
 		if (!view->surface) {
 			continue;
 		}
-		if (!view->mapped && !view->minimized) {
+		if (!view->mapped) {
 			continue;
 		}
 		if (top_parent_of(view) != surface) {
@@ -1032,6 +988,7 @@ static const struct view_impl xwayland_view_impl = {
 	.unmap = xwayland_view_unmap,
 	.maximize = xwayland_view_maximize,
 	.minimize = xwayland_view_minimize,
+	.get_parent = xwayland_view_get_parent,
 	.get_root = xwayland_view_get_root,
 	.append_children = xwayland_view_append_children,
 	.is_modal_dialog = xwayland_view_is_modal_dialog,
