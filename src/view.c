@@ -570,7 +570,7 @@ view_update_outputs(struct view *view)
 	wl_list_for_each(output, &view->server->outputs, link) {
 		if (output_is_usable(output) && wlr_output_layout_intersects(
 				layout, output->wlr_output, &view->current)) {
-			new_outputs |= (1ull << output->scene_output->WLR_PRIVATE.index);
+			new_outputs |= output->id_bit;
 		}
 	}
 
@@ -586,8 +586,7 @@ view_on_output(struct view *view, struct output *output)
 {
 	assert(view);
 	assert(output);
-	return output->scene_output
-			&& (view->outputs & (1ull << output->scene_output->WLR_PRIVATE.index));
+	return (view->outputs & output->id_bit) != 0;
 }
 
 void
@@ -2445,27 +2444,6 @@ mappable_disconnect(struct mappable *mappable)
 	mappable->connected = false;
 }
 
-static void
-handle_map(struct wl_listener *listener, void *data)
-{
-	struct view *view = wl_container_of(listener, view, mappable.map);
-	view->impl->map(view);
-}
-
-static void
-handle_unmap(struct wl_listener *listener, void *data)
-{
-	struct view *view = wl_container_of(listener, view, mappable.unmap);
-	view->impl->unmap(view);
-}
-
-void
-view_connect_map(struct view *view, struct wlr_surface *surface)
-{
-	assert(view);
-	mappable_connect(&view->mappable, surface, handle_map, handle_unmap);
-}
-
 /* Used in both (un)map and (un)minimize */
 void
 view_update_visibility(struct view *view)
@@ -2539,7 +2517,15 @@ view_set_shade(struct view *view, bool shaded)
 
 	view->shaded = shaded;
 	ssd_enable_shade(view->ssd, view->shaded);
-	wlr_scene_node_set_enabled(&view->content_tree->node, !view->shaded);
+	/*
+	 * An unmapped view may not have a content tree. When the view
+	 * is mapped again, the new content tree will be hidden by the
+	 * map handler, if the view is still shaded at that point.
+	 */
+	if (view->content_tree) {
+		wlr_scene_node_set_enabled(&view->content_tree->node,
+			!view->shaded);
+	}
 }
 
 void

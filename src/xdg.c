@@ -743,8 +743,9 @@ set_initial_position(struct view *view)
 }
 
 static void
-xdg_toplevel_view_map(struct view *view)
+handle_map(struct wl_listener *listener, void *data)
 {
+	struct view *view = wl_container_of(listener, view, mappable.map);
 	if (view->mapped) {
 		return;
 	}
@@ -758,14 +759,6 @@ xdg_toplevel_view_map(struct view *view)
 	}
 
 	view->mapped = true;
-
-	if (!view->foreign_toplevel) {
-		view_impl_init_foreign_toplevel(view);
-		/*
-		 * Initial outputs will be synced via
-		 * view->events.new_outputs on view_moved()
-		 */
-	}
 
 	if (!view->been_mapped) {
 		if (view_wants_decorations(view)) {
@@ -807,8 +800,9 @@ xdg_toplevel_view_map(struct view *view)
 }
 
 static void
-xdg_toplevel_view_unmap(struct view *view)
+handle_unmap(struct wl_listener *listener, void *data)
 {
+	struct view *view = wl_container_of(listener, view, mappable.unmap);
 	if (view->mapped) {
 		view->mapped = false;
 		view_impl_unmap(view);
@@ -832,11 +826,9 @@ xdg_view_get_pid(struct view *view)
 static const struct view_impl xdg_toplevel_view_impl = {
 	.configure = xdg_toplevel_view_configure,
 	.close = xdg_toplevel_view_close,
-	.map = xdg_toplevel_view_map,
 	.set_activated = xdg_toplevel_view_set_activated,
 	.set_fullscreen = xdg_toplevel_view_set_fullscreen,
 	.notify_tiled = xdg_toplevel_view_notify_tiled,
-	.unmap = xdg_toplevel_view_unmap,
 	.maximize = xdg_toplevel_view_maximize,
 	.minimize = xdg_toplevel_view_minimize,
 	.get_parent = xdg_toplevel_view_get_parent,
@@ -1006,7 +998,8 @@ handle_new_xdg_toplevel(struct wl_listener *listener, void *data)
 	view->surface = xdg_surface->surface;
 	view->surface->data = tree;
 
-	view_connect_map(view, xdg_surface->surface);
+	mappable_connect(&view->mappable, xdg_surface->surface,
+		handle_map, handle_unmap);
 
 	struct wlr_xdg_toplevel *toplevel = xdg_surface->toplevel;
 	CONNECT_SIGNAL(toplevel, view, destroy);
