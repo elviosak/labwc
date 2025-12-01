@@ -15,11 +15,11 @@
 #include "common/match.h"
 #include "common/mem.h"
 #include "config/rcxml.h"
+#include "cycle.h"
 #include "foreign-toplevel/foreign.h"
 #include "input/keyboard.h"
 #include "labwc.h"
 #include "menu/menu.h"
-#include "osd.h"
 #include "output.h"
 #include "placement.h"
 #include "regions.h"
@@ -343,48 +343,6 @@ view_prev(struct wl_list *head, struct view *view, enum lab_view_criteria criter
 		}
 	}
 	return NULL;
-}
-
-struct view *
-view_next_no_head_stop(struct wl_list *head, struct view *from,
-		enum lab_view_criteria criteria)
-{
-	assert(head);
-
-	struct wl_list *elm = from ? &from->link : head;
-
-	struct wl_list *end = elm;
-	for (elm = elm->next; elm != end; elm = elm->next) {
-		if (elm == head) {
-			continue;
-		}
-		struct view *view = wl_container_of(elm, view, link);
-		if (matches_criteria(view, criteria)) {
-			return view;
-		}
-	}
-	return from;
-}
-
-struct view *
-view_prev_no_head_stop(struct wl_list *head, struct view *from,
-		enum lab_view_criteria criteria)
-{
-	assert(head);
-
-	struct wl_list *elm = from ? &from->link : head;
-
-	struct wl_list *end = elm;
-	for (elm = elm->prev; elm != end; elm = elm->prev) {
-		if (elm == head) {
-			continue;
-		}
-		struct view *view = wl_container_of(elm, view, link);
-		if (matches_criteria(view, criteria)) {
-			return view;
-		}
-	}
-	return from;
 }
 
 void
@@ -823,7 +781,7 @@ view_minimize(struct view *view, bool minimized)
 {
 	assert(view);
 
-	if (view->server->input_mode == LAB_INPUT_STATE_WINDOW_SWITCHER) {
+	if (view->server->input_mode == LAB_INPUT_STATE_CYCLE) {
 		wlr_log(WLR_ERROR, "not minimizing window while window switching");
 		return;
 	}
@@ -2612,15 +2570,13 @@ view_destroy(struct view *view)
 		server->session_lock_manager->last_active_view = NULL;
 	}
 
-	if (server->seat.pressed.view == view) {
-		seat_reset_pressed(&server->seat);
-	}
-
 	if (view->tiled_region_evacuate) {
 		zfree(view->tiled_region_evacuate);
 	}
 
-	osd_on_view_destroy(view);
+	/* TODO: call this on map/unmap instead */
+	cycle_reinitialize(server);
+
 	undecorate(view);
 
 	view_set_icon(view, NULL, NULL);
