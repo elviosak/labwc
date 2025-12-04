@@ -714,6 +714,8 @@ fill_libinput_category(xmlNode *node)
 	char *key, *content;
 	LAB_XML_FOR_EACH(node, child, key, content) {
 		if (string_null_or_empty(content)) {
+			wlr_log(WLR_ERROR, "Empty string is not allowed for "
+				"<libinput><device><%s>. Ignoring.", key);
 			continue;
 		}
 		if (!strcmp(key, "category")) {
@@ -1076,7 +1078,8 @@ entry(xmlNode *node, char *nodename, char *content)
 		return true;
 
 	} else if (str_space_only(content)) {
-		/* ignore empty leaf nodes other than above */
+		wlr_log(WLR_ERROR, "Empty string is not allowed for %s. "
+			"Ignoring.", nodename);
 
 	/* handle non-empty leaf nodes */
 	} else if (!strcmp(nodename, "decoration.core")) {
@@ -1177,12 +1180,12 @@ entry(xmlNode *node, char *nodename, char *content)
 	} else if (!strcasecmp(nodename, "unMaximizeThreshold.resistance")) {
 		rc.unmaximize_threshold = atoi(content);
 	} else if (!strcasecmp(nodename, "range.snapping")) {
-		rc.snap_edge_horizontal_range = atoi(content);
-		rc.snap_edge_vertical_range = atoi(content);
-	} else if (!strcasecmp(nodename, "horizontalRange.snapping")) {
-		rc.snap_edge_horizontal_range = atoi(content);
-	} else if (!strcasecmp(nodename, "verticalRange.snapping")) {
-		rc.snap_edge_vertical_range = atoi(content);
+		rc.snap_edge_range_inner = atoi(content);
+		rc.snap_edge_range_outer = atoi(content);
+	} else if (!strcasecmp(nodename, "inner.range.snapping")) {
+		rc.snap_edge_range_inner = atoi(content);
+	} else if (!strcasecmp(nodename, "outer.range.snapping")) {
+		rc.snap_edge_range_outer = atoi(content);
 	} else if (!strcasecmp(nodename, "cornerRange.snapping")) {
 		rc.snap_edge_corner_range = atoi(content);
 	} else if (!strcasecmp(nodename, "enabled.overlay.snapping")) {
@@ -1227,20 +1230,20 @@ entry(xmlNode *node, char *nodename, char *content)
 	} else if (!strcasecmp(nodename, "output.osd.windowSwitcher")) {
 		if (!strcasecmp(content, "all")) {
 			rc.window_switcher.output_criteria = CYCLE_OSD_OUTPUT_ALL;
-		} else if (!strcasecmp(content, "pointer")) {
-			rc.window_switcher.output_criteria = CYCLE_OSD_OUTPUT_POINTER;
-		} else if (!strcasecmp(content, "keyboard")) {
-			rc.window_switcher.output_criteria = CYCLE_OSD_OUTPUT_KEYBOARD;
+		} else if (!strcasecmp(content, "cursor")) {
+			rc.window_switcher.output_criteria = CYCLE_OSD_OUTPUT_CURSOR;
+		} else if (!strcasecmp(content, "focused")) {
+			rc.window_switcher.output_criteria = CYCLE_OSD_OUTPUT_FOCUSED;
 		} else {
 			wlr_log(WLR_ERROR, "Invalid windowSwitcher output %s: "
-				"should be one of all|pointer|keyboard", content);
+				"should be one of all|focused|cursor", content);
 		}
 
 	/* The following two are for backward compatibility only. */
 	} else if (!strcasecmp(nodename, "show.windowSwitcher")) {
 		set_bool(content, &rc.window_switcher.show);
 		wlr_log(WLR_ERROR, "<windowSwitcher show=\"\" /> is deprecated."
-			" Use <osd show=\"\" />");
+			" Use <windowSwitcher><osd show=\"\" />");
 	} else if (!strcasecmp(nodename, "style.windowSwitcher")) {
 		if (!strcasecmp(content, "classic")) {
 			rc.window_switcher.style = CYCLE_OSD_STYLE_CLASSIC;
@@ -1248,7 +1251,7 @@ entry(xmlNode *node, char *nodename, char *content)
 			rc.window_switcher.style = CYCLE_OSD_STYLE_THUMBNAIL;
 		}
 		wlr_log(WLR_ERROR, "<windowSwitcher style=\"\" /> is deprecated."
-			" Use <osd style=\"\" />");
+			" Use <windowSwitcher><osd style=\"\" />");
 
 	} else if (!strcasecmp(nodename, "preview.windowSwitcher")) {
 		set_bool(content, &rc.window_switcher.preview);
@@ -1461,8 +1464,8 @@ rcxml_init(void)
 	rc.unsnap_threshold = 20;
 	rc.unmaximize_threshold = 150;
 
-	rc.snap_edge_horizontal_range = 10;
-	rc.snap_edge_vertical_range = 10;
+	rc.snap_edge_range_inner = 10;
+	rc.snap_edge_range_outer = 10;
 	rc.snap_edge_corner_range = 50;
 	rc.snap_overlay_enabled = true;
 	rc.snap_overlay_delay_inner = 500;

@@ -274,6 +274,7 @@ handle_commit(struct wl_listener *listener, void *data)
 	 */
 	if (current->width != state->width || current->height != state->height) {
 		view_impl_apply_geometry(view, state->width, state->height);
+		view_moved(view);
 	}
 }
 
@@ -1050,7 +1051,6 @@ handle_new_surface(struct wl_listener *listener, void *data)
 	struct server *server =
 		wl_container_of(listener, server, xwayland_new_surface);
 	struct wlr_xwayland_surface *xsurface = data;
-	wlr_xwayland_surface_ping(xsurface);
 
 	/*
 	 * We do not create 'views' for xwayland override_redirect surfaces,
@@ -1437,4 +1437,14 @@ xwayland_update_workarea(struct server *server)
 		.height = workarea_bottom - workarea_top,
 	};
 	wlr_xwayland_set_workareas(server->xwayland, &workarea, 1);
+}
+
+void
+xwayland_flush(struct server *server)
+{
+	if (!server->xwayland || !server->xwayland->xwm) {
+		return;
+	}
+
+	xcb_flush(wlr_xwayland_get_xwm_connection(server->xwayland));
 }

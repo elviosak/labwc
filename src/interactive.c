@@ -42,7 +42,7 @@ interactive_anchor_to_cursor(struct server *server, struct wlr_box *geo)
 	if (wlr_box_empty(geo)) {
 		return;
 	}
-	/* Resize grab_box while anchoring it to grab_box.{x,y} */
+	/* Resize grab_box while anchoring it to grab_{x,y} */
 	server->grab_box.x = max_move_scale(server->grab_x, server->grab_box.x,
 		server->grab_box.width, geo->width);
 	server->grab_box.y = max_move_scale(server->grab_y, server->grab_box.y,
@@ -174,6 +174,32 @@ interactive_begin(struct view *view, enum input_mode mode, enum lab_edge edges)
 	}
 }
 
+static enum lab_edge
+find_adjacent_edges(struct seat *seat, struct output *output)
+{
+	enum lab_edge adjacent = LAB_EDGE_NONE;
+	if (!output_is_usable(output)) {
+		return adjacent;
+	}
+	if (wlr_output_layout_adjacent_output(seat->server->output_layout, WLR_DIRECTION_UP,
+			output->wlr_output, output->usable_area.x, output->usable_area.y)) {
+		adjacent |= LAB_EDGE_TOP;
+	}
+	if (wlr_output_layout_adjacent_output(seat->server->output_layout, WLR_DIRECTION_DOWN,
+			output->wlr_output, output->usable_area.x, output->usable_area.y)) {
+		adjacent |= LAB_EDGE_BOTTOM;
+	}
+	if (wlr_output_layout_adjacent_output(seat->server->output_layout, WLR_DIRECTION_LEFT,
+			output->wlr_output, output->usable_area.x, output->usable_area.y)) {
+		adjacent |= LAB_EDGE_LEFT;
+	}
+	if (wlr_output_layout_adjacent_output(seat->server->output_layout, WLR_DIRECTION_RIGHT,
+			output->wlr_output, output->usable_area.x, output->usable_area.y)) {
+		adjacent |= LAB_EDGE_RIGHT;
+	}
+	return adjacent;
+}
+
 bool
 edge_from_cursor(struct seat *seat, struct output **dest_output,
 		enum lab_edge *edge1, enum lab_edge *edge2)
@@ -186,7 +212,7 @@ edge_from_cursor(struct seat *seat, struct output **dest_output,
 		return false;
 	}
 
-	if (rc.snap_edge_horizontal_range == 0 && rc.snap_edge_vertical_range == 0) {
+	if (rc.snap_edge_range_inner == 0 && rc.snap_edge_range_outer == 0) {
 		return false;
 	}
 
@@ -210,13 +236,23 @@ edge_from_cursor(struct seat *seat, struct output **dest_output,
 	int left = cursor_x - area->x;
 	int right = area->x + area->width - cursor_x;
 
-	if (top < rc.snap_edge_vertical_range) {
+	enum lab_edge adjacent_edges = find_adjacent_edges(seat, output);
+	int top_range = adjacent_edges & LAB_EDGE_TOP ?
+			rc.snap_edge_range_inner : rc.snap_edge_range_outer;
+	int bottom_range = adjacent_edges & LAB_EDGE_BOTTOM ?
+			rc.snap_edge_range_inner : rc.snap_edge_range_outer;
+	int left_range = adjacent_edges & LAB_EDGE_LEFT ?
+			rc.snap_edge_range_inner : rc.snap_edge_range_outer;
+	int right_range = adjacent_edges & LAB_EDGE_RIGHT ?
+			rc.snap_edge_range_inner : rc.snap_edge_range_outer;
+
+	if (top < top_range) {
 		*edge1 = LAB_EDGE_TOP;
-	} else if (bottom < rc.snap_edge_vertical_range) {
+	} else if (bottom < bottom_range) {
 		*edge1 = LAB_EDGE_BOTTOM;
-	} else if (left < rc.snap_edge_horizontal_range) {
+	} else if (left < left_range) {
 		*edge1 = LAB_EDGE_LEFT;
-	} else if (right < rc.snap_edge_horizontal_range) {
+	} else if (right < right_range) {
 		*edge1 = LAB_EDGE_RIGHT;
 	} else {
 		return false;

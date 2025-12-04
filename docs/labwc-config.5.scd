@@ -363,7 +363,7 @@ this is for compatibility with Openbox.
 	*unshade* [yes|no] Temporarily unshade windows when switching between
 	them and permanently unshade on the final selection. Default is yes.
 
-*<osd show="" style="" output="" thumbnailLabelFormat="" />*
+*<windowSwitcher><osd show="" style="" output="" thumbnailLabelFormat="" />*
 	*show* [yes|no] Draw the OnScreenDisplay when switching between
 	windows. Default is yes.
 
@@ -371,10 +371,10 @@ this is for compatibility with Openbox.
 	"classic" displays window information like icons and titles in a vertical list.
 	"thumbnail" shows window thumbnail, icon and title in grids.
 
-	*output* [all|pointer|keyboard] Configures which monitor(s) show the OSD.
+	*output* [all|focused|cursor] Configures which monitor(s) show the OSD.
 	"all" displays the OSD on all monitors.
-	"pointer" displays the OSD on the monitor containing the mouse pointer.
-	"keyboard" displays the OSD on the monitor with keyboard focus.
+	"focused" displays the OSD on the monitor with keyboard focus.
+	"cursor" displays the OSD on the monitor containing the mouse pointer.
 	Default is "all".
 
 	*thumbnailLabelFormat* Format to be used for the thumbnail label according to *custom*
@@ -498,15 +498,16 @@ activated with SnapToEdge actions or, optionally, by dragging windows to the
 edges of an output. Edge snapping causes a window to occupy half of its output,
 extending outward from the snapped edge.
 
-*<snapping><horizontalRange>*++
-*<snapping><verticalRange>*++
+*<snapping><range><inner>*++
+*<snapping><range><outer>*++
 *<snapping><cornerRange>*
-	If an interactive move ends with the cursor within *<horizontalRange>* pixels of
-	the left/right output edge, or *<verticalRange>* of the top/bottom output edge,
-	the window is snapped to the edge. If it's also within *<cornerRange>* pixels of
-	an output corner, the window is snapped to the corner instead.
-	If *<horizontalRange>* and *<verticalRange>* is 0, snapping is disabled.
-	Default is 10 for *<horizontalRange>* and *<verticalRange>*, and 50 for *<cornerRange>*.
+	If an interactive move ends with the cursor within *inner* or *outer* pixels
+	of an output edge, the window is snapped to the edge. *inner* edges are edges
+	with an adjacent output and *outer* edges are edges without an adjacent output.
+	If it's also within *<cornerRange>* pixels of an output corner, the window is
+	snapped to the corner instead.
+	If *inner* and *outer* is 0, snapping is disabled.
+	Default is 10 for *<range><inner>* and *<range><outer>*, and 50 for *<cornerRange>*.
 
 *<snapping><overlay><enabled>* [yes|no]
 	Show an overlay when snapping to a window to an edge. Default is yes.
